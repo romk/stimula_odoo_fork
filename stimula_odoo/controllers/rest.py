@@ -1,9 +1,25 @@
 """
-This script provides the Stimula REST controller. It takes care of handling requests, parsing parameters and invoking the Stimula library.
-It wraps each call with handlers for authentication, database connection and exceptions.
+    rest.py
 
-Author: Romke Jonker
-Email: romke@rnadesign.net
+    Copyright (C) 2024 STML.IO
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Lesser General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public License
+    along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+    Developer: Romke Jonker
+    Contact: romke@stml.io
+    Description: This script provides the Stimula REST controller. It takes care of handling requests, parsing parameters and invoking the Stimula library.
+It wraps each call with handlers for authentication, database connection and exceptions.
 """
 import logging
 import random
@@ -69,10 +85,11 @@ def authentication_handler(f):
         token = authorization_header[len('Bearer '):]
 
         # validate the token
-        database, uid = StimulaController._auth.validate_token(token)
+        database, uid, username = StimulaController._auth.validate_token(token)
 
         cnx_context.database = database
         cnx_context.uid = uid
+        cnx_context.username = username
 
         return f(*args, **kwargs)
 
@@ -113,7 +130,8 @@ class StimulaController(http.Controller):
 
     def get_token_lifetime(self, database):
         key = 'stimula_odoo.token_lifetime'
-        default_generator = lambda: '900'
+        # generator to create a default token lifetime of 24 hours
+        default_generator = lambda: 60 * 60 * 24
         return int(self.get_or_set_param(database, key, default_generator))
 
     def get_or_set_param(self, database, key, default_generator):
@@ -148,8 +166,23 @@ class StimulaController(http.Controller):
     @http.route('/stimula/1.0/auth', type='http', auth='none', methods=['POST'], csrf=False)
     @exception_handler
     def authenticate(self, **post):
+        # get database from form data
+        database = post.get('database')
+
+        # if no database is provided, then try to resolve based on the request context.
+        # This is useful when running in a single-database configuration when it's not easy to find the database name,
+        # like on an odoo.sh production build.
+        if not database:
+            # and if this request is served from a db context
+            if hasattr(request, 'env') and hasattr(request.env, 'cr') and hasattr(request.env.cr, 'dbname'):
+                # then use the current db context
+                database = request.env.cr.dbname
+            else:
+                # otherwise, raise an exception
+                raise Exception('No database provided. Either provide a database parameter or run this request from a single database configuration.')
+
         # authenticate the posted credentials. Always validate we can connect.
-        token = self._auth.authenticate(post['database'], post['username'], post['password'])
+        token = self._auth.authenticate(database, post['username'], post['password'])
 
         # return the token
         return request.make_json_response({'token': token})
